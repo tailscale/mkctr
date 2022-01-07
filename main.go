@@ -251,7 +251,7 @@ func fetchAndBuild(bp *buildParams) error {
 	}
 
 	// Generate a new index with all the platform images.
-	idx := mutate.AppendManifests(mutate.IndexMediaType(empty.Index, types.OCIImageIndex), adds...)
+	idx := mutate.AppendManifests(mutate.IndexMediaType(empty.Index, types.DockerManifestList), adds...)
 	d, err := idx.Digest()
 	if err != nil {
 		return err
