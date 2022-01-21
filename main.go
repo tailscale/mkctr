@@ -79,6 +79,7 @@ type buildParams struct {
 	imageRefs   []name.Reference
 	publish     bool
 	ldflags     string
+	gotags      string
 }
 
 func main() {
@@ -88,7 +89,8 @@ func main() {
 		files      = flag.String("files", "", "comma-separated list of static files in src:dst form")
 		repos      = flag.String("repos", "", "comma-seperated list of image registries")
 		tagArg     = flag.String("tags", "", "comma-seperated tags")
-		ldflagsArg = flag.String("ldflags", "", "ldflags to pass to go")
+		ldflagsArg = flag.String("ldflags", "", "the --ldflags value to pass to go")
+		gotags     = flag.String("gotags", "", "the --tags value to pass to go")
 		push       = flag.Bool("push", false, "publish the image")
 	)
 	flag.Parse()
@@ -124,6 +126,7 @@ func main() {
 		imageRefs:   refs,
 		publish:     *push,
 		ldflags:     *ldflagsArg,
+		gotags:      *gotags,
 	}
 
 	if err := fetchAndBuild(bp); err != nil {
@@ -314,7 +317,7 @@ func createImageForBase(bp *buildParams, logf logf, base v1.Image, platform v1.P
 	// Compile all the goPaths
 	for gp, dst := range bp.goPaths {
 		logf("compiling %v", gp)
-		n, err := compileGoBinary(gp, tmpDir, env, bp.ldflags)
+		n, err := compileGoBinary(gp, tmpDir, env, bp.ldflags, bp.gotags)
 		if err != nil {
 			return nil, err
 		}
@@ -328,7 +331,7 @@ func createImageForBase(bp *buildParams, logf logf, base v1.Image, platform v1.P
 	return mutate.AppendLayers(base, layer)
 }
 
-func compileGoBinary(what, where string, env []string, ldflags string) (string, error) {
+func compileGoBinary(what, where string, env []string, ldflags, gotags string) (string, error) {
 	f, err := os.CreateTemp(where, "out")
 	if err != nil {
 		return "", err
@@ -341,6 +344,9 @@ func compileGoBinary(what, where string, env []string, ldflags string) (string, 
 		"build",
 		"-v",
 		"-trimpath",
+	}
+	if len(gotags) > 0 {
+		args = append(args, "--tags="+gotags)
 	}
 	if len(ldflags) > 0 {
 		args = append(args, "--ldflags="+ldflags)
