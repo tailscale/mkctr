@@ -14,7 +14,9 @@ mkctr \
     tailscale.com/cmd/tailscaled:/usr/local/bin/tailscaled" \
   --tags="latest" \
   --repos="tailscale/tailscale" \
-  --push
+  [--target=<target>] \ # e.g. flyio
+  [--push] \
+  [--] [<cmd>...]
 ```
 
 `mkctr` auto discovers `GOOS`/`GOARCH` from the specified base image. If the base image supports multiple platforms, binaries are compiled for each platform as long as it's one of `linux/amd64`, `linux/386`, `linux/arm`, `linux/arm64`.

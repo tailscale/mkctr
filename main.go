@@ -248,6 +248,14 @@ func fetchAndBuild(bp *buildParams) error {
 		if err != nil {
 			return err
 		}
+		if args := flag.Args(); len(args) > 0 {
+			img, err = mutate.Config(img, v1.Config{
+				Cmd: args,
+			})
+			if err != nil {
+				return err
+			}
+		}
 		d, err := img.Digest()
 		if err != nil {
 			return err
