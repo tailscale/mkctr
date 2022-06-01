@@ -80,6 +80,7 @@ type buildParams struct {
 	publish     bool
 	ldflags     string
 	gotags      string
+	target      string
 }
 
 func main() {
@@ -92,6 +93,7 @@ func main() {
 		ldflagsArg = flag.String("ldflags", "", "the --ldflags value to pass to go")
 		gotags     = flag.String("gotags", "", "the --tags value to pass to go")
 		push       = flag.Bool("push", false, "publish the image")
+		target     = flag.String("target", "", "build for a specific env (options: flyio)")
 	)
 	flag.Parse()
 	if *tagArg == "" {
@@ -102,6 +104,11 @@ func main() {
 	}
 	if *baseImage == "" {
 		log.Fatal("baseImage must be set")
+	}
+	switch *target {
+	case "", "flyio":
+	default:
+		log.Fatalf("unsupported target %q", *target)
 	}
 	refs, err := parseRepos(strings.Split(*repos, ","), strings.Split(*tagArg, ","))
 	if err != nil {
@@ -127,6 +134,7 @@ func main() {
 		publish:     *push,
 		ldflags:     *ldflagsArg,
 		gotags:      *gotags,
+		target:      *target,
 	}
 
 	if err := fetchAndBuild(bp); err != nil {
@@ -146,9 +154,12 @@ func fetchBaseImage(baseImage string, opts ...remote.Option) (*remote.Descriptor
 	return desc, nil
 }
 
-func verifyPlatform(p v1.Platform) error {
+func verifyPlatform(p v1.Platform, target string) error {
 	if p.OS != "linux" {
 		return fmt.Errorf("unsupported OS: %v", p.OS)
+	}
+	if target == "flyio" && p.Architecture != "amd64" {
+		return fmt.Errorf("not required for target %q", target)
 	}
 	switch p.Architecture {
 	case "arm", "arm64", "amd64", "386":
@@ -182,7 +193,7 @@ func fetchAndBuild(bp *buildParams) error {
 			return fmt.Errorf("unknown platform for image: %v", bp.baseImage)
 		}
 		p := *baseDesc.Platform
-		if err := verifyPlatform(p); err != nil {
+		if err := verifyPlatform(p, bp.target); err != nil {
 			return err
 		}
 		logf := withPrefix(logf, fmt.Sprintf("%v/%v: ", baseDesc.Platform.OS, baseDesc.Platform.Architecture))
@@ -223,7 +234,7 @@ func fetchAndBuild(bp *buildParams) error {
 		if id.Platform == nil {
 			return fmt.Errorf("unknown platform for image: %v", bp.baseImage)
 		}
-		if err := verifyPlatform(*id.Platform); err != nil {
+		if err := verifyPlatform(*id.Platform, bp.target); err != nil {
 			logf("skipping: %v", err)
 			continue
 		}
@@ -252,7 +263,31 @@ func fetchAndBuild(bp *buildParams) error {
 			},
 		})
 	}
+	switch len(adds) {
+	case 0:
+		logf("no images")
+		return nil
+	case 1:
+		// Don't use a manifest for a single image.
+		img := adds[0].Add.(v1.Image)
+		d, err := img.Digest()
+		if err != nil {
+			return err
+		}
+		logf("image digest: %v", d)
+		if !bp.publish {
+			logf("not pushing")
+			return nil
+		}
 
+		for _, r := range bp.imageRefs {
+			logf("pushing to %v", r)
+			if err := remote.Write(r, img, remoteOpts...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	// Generate a new index with all the platform images.
 	idx := mutate.AppendManifests(mutate.IndexMediaType(empty.Index, types.DockerManifestList), adds...)
 	d, err := idx.Digest()
