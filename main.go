@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -432,12 +433,17 @@ func layerFromFiles(logf logf, files map[string]string) (v1.Layer, error) {
 		return nil
 	}
 	for src, dst := range files {
-		// Make sure the dir exists.
-		if err := writeDir(filepath.Dir(dst)); err != nil {
-			return nil, err
-		}
-		logf("copying %v -> %v", src, dst)
-		if err := tarFile(tw, src, dst); err != nil {
+		err := filepath.WalkDir(src, func(srcWalk string, d fs.DirEntry, err error) error {
+			path := strings.TrimPrefix(srcWalk, src)
+			dstWalk := filepath.Join(dst, path)
+			writeDir(filepath.Dir(dstWalk))
+			if d.IsDir() {
+				return writeDir(dstWalk)
+			}
+			logf("copying %v -> %v", srcWalk, dstWalk)
+			return tarFile(tw, srcWalk, dstWalk)
+		})
+		if err != nil {
 			return nil, err
 		}
 	}
