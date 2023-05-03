@@ -82,6 +82,7 @@ type buildParams struct {
 	ldflags     string
 	gotags      string
 	target      string
+	verbose     bool
 }
 
 func main() {
@@ -95,6 +96,7 @@ func main() {
 		gotags     = flag.String("gotags", "", "the --tags value to pass to go")
 		push       = flag.Bool("push", false, "publish the image")
 		target     = flag.String("target", "", "build for a specific env (options: flyio)")
+		verbose    = flag.Bool("v", false, "verbose build output")
 	)
 	flag.Parse()
 	if *tagArg == "" {
@@ -136,6 +138,7 @@ func main() {
 		ldflags:     *ldflagsArg,
 		gotags:      *gotags,
 		target:      *target,
+		verbose:     *verbose,
 	}
 
 	if err := fetchAndBuild(bp); err != nil {
@@ -361,7 +364,7 @@ func createImageForBase(bp *buildParams, logf logf, base v1.Image, platform v1.P
 	// Compile all the goPaths
 	for gp, dst := range bp.goPaths {
 		logf("compiling %v", gp)
-		n, err := compileGoBinary(gp, tmpDir, env, bp.ldflags, bp.gotags)
+		n, err := compileGoBinary(gp, tmpDir, env, bp.ldflags, bp.gotags, bp.verbose)
 		if err != nil {
 			return nil, err
 		}
@@ -375,7 +378,7 @@ func createImageForBase(bp *buildParams, logf logf, base v1.Image, platform v1.P
 	return mutate.AppendLayers(base, layer)
 }
 
-func compileGoBinary(what, where string, env []string, ldflags, gotags string) (string, error) {
+func compileGoBinary(what, where string, env []string, ldflags, gotags string, verbose bool) (string, error) {
 	f, err := os.CreateTemp(where, "out")
 	if err != nil {
 		return "", err
@@ -386,8 +389,10 @@ func compileGoBinary(what, where string, env []string, ldflags, gotags string) (
 	}
 	args := []string{
 		"build",
-		"-v",
 		"-trimpath",
+	}
+	if verbose {
+		args = append(args, "-v")
 	}
 	if len(gotags) > 0 {
 		args = append(args, "--tags="+gotags)
