@@ -14,6 +14,7 @@ mkctr \
     tailscale.com/cmd/tailscaled:/usr/local/bin/tailscaled" \
   --tags="latest" \
   --repos="tailscale/tailscale" \
+  [--files=foo.txt:/var/lib/foo.txt,bar.txt:/var/lib/bar.txt] \
   [--target=<target>] \ # e.g. flyio
   [--push] \
   [--] [<cmd>...]
