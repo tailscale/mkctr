@@ -8,7 +8,7 @@ This is inspired by [ko](https://github.com/google/ko) which is awesome but does
 
 ```bash
 mkctr \
-  --base="ghcr.io/tailscale/alpine-base:3.14" \
+  --base="alpine:latest" \
   --gopaths="\
     tailscale.com/cmd/tailscale:/usr/local/bin/tailscale, \
     tailscale.com/cmd/tailscaled:/usr/local/bin/tailscaled" \
