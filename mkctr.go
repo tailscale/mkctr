@@ -373,7 +373,21 @@ func createImageForBase(bp *buildParams, logf logf, base v1.Image, platform v1.P
 		logf("output %v -> %v", gp, n)
 		files[n] = dst
 	}
-	layer, err := layerFromFiles(logf, files)
+	// Determine media type of the base image.
+	var layerMediaType types.MediaType
+	mt, err := base.MediaType()
+	if err != nil {
+		return nil, fmt.Errorf("error determining base image media type: %v", err)
+	}
+	switch mt {
+	case types.OCIManifestSchema1:
+		layerMediaType = types.OCILayer
+	case types.DockerManifestSchema2:
+		layerMediaType = types.DockerLayer
+	default:
+		return nil, fmt.Errorf("unknown base image media type %v, accepted types are OCI image manifest v1 (%s) and Docker image manifest v2 (%s)", mt, types.OCIManifestSchema1, types.DockerManifestSchema2)
+	}
+	layer, err := layerFromFiles(logf, files, layerMediaType)
 	if err != nil {
 		return nil, err
 	}
@@ -416,7 +430,7 @@ func compileGoBinary(what, where string, env []string, ldflags, gotags string, v
 	return out, nil
 }
 
-func layerFromFiles(logf logf, files map[string]string) (v1.Layer, error) {
+func layerFromFiles(logf logf, files map[string]string, layerMediaType types.MediaType) (v1.Layer, error) {
 	buf := bytes.NewBuffer(nil)
 	tw := tar.NewWriter(buf)
 	defer tw.Close()
@@ -458,7 +472,18 @@ func layerFromFiles(logf logf, files map[string]string) (v1.Layer, error) {
 		return nil, err
 	}
 
-	return tarball.LayerFromReader(buf, tarball.WithCompressedCaching)
+	binaryLayerBytes := buf.Bytes()
+	// An alternative to using tarball.LayerFromOpener would be to use
+	// stream.NewLayer
+	// https://pkg.go.dev/github.com/google/go-containerregistry@v0.17.0/pkg/v1/stream#NewLayer.
+	// This would, however, require us to restructure the code to write each
+	// layer to the upstream repository immediately after producing it. At
+	// this point we (irbekrm) are not sure if there would be any benefits
+	// to switching to stream.NewLayer.
+	// https://github.com/google/go-containerregistry/tree/main/pkg/v1/stream#caveats
+	return tarball.LayerFromOpener(func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewBuffer(binaryLayerBytes)), nil
+	}, tarball.WithCompressedCaching, tarball.WithMediaType(layerMediaType))
 }
 
 func tarFile(tw *tar.Writer, src, dst string) error {
