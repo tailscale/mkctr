@@ -300,8 +300,10 @@ func fetchAndBuild(bp *buildParams) error {
 		}
 		return nil
 	}
-	// Generate a new index with all the platform images.
-	idx := mutate.AppendManifests(mutate.IndexMediaType(empty.Index, types.DockerManifestList), adds...)
+	// Generate a new 'fat manifest' with all the platform images. If we are
+	// at this point the base was either a Dokcer manifest list or an OCI
+	// image index- make sure the new manifest of that type.
+	idx := mutate.AppendManifests(mutate.IndexMediaType(empty.Index, baseDesc.MediaType), adds...)
 	d, err := idx.Digest()
 	if err != nil {
 		return err
