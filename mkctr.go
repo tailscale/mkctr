@@ -9,6 +9,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -62,9 +63,6 @@ func parseRepos(reg, tags []string) ([]name.Tag, error) {
 	var refs []name.Tag
 	for _, rs := range reg {
 		r, err := name.NewRepository(rs)
-		if err != nil {
-			return nil, err
-		}
 		if err != nil {
 			return nil, err
 		}
@@ -180,7 +178,7 @@ func verifyPlatform(p v1.Platform, target string) error {
 	if p.OS != "linux" {
 		return fmt.Errorf("unsupported OS: %v", p.OS)
 	}
-	if target == "local" && canRunLocal(p) {
+	if target == "local" && !canRunLocal(p) {
 		return fmt.Errorf("not required for target %q", target)
 	}
 	if target == "flyio" && p.Architecture != "amd64" {
@@ -233,7 +231,7 @@ func fetchAndBuild(bp *buildParams) error {
 
 		for _, r := range bp.imageRefs {
 			if bp.target == "local" {
-				if _, err := daemon.Write(r, img); err != nil {
+				if err := loadLocalImage(logf, r, img); err != nil {
 					return err
 				}
 				continue
@@ -321,7 +319,7 @@ func fetchAndBuild(bp *buildParams) error {
 
 		for _, r := range bp.imageRefs {
 			if bp.target == "local" {
-				if _, err := daemon.Write(r, img); err != nil {
+				if err := loadLocalImage(logf, r, img); err != nil {
 					return err
 				}
 				continue
@@ -545,5 +543,41 @@ func tarFile(tw *tar.Writer, src, dst string) error {
 	if _, err := io.Copy(tw, file); err != nil {
 		return err
 	}
+	return nil
+}
+
+func loadLocalImage(logf logf, tag name.Tag, img v1.Image) error {
+	if _, err := daemon.Write(tag, img); err == nil {
+		return nil
+	}
+
+	// Assume we failed because the docker daemon API is not available, try a
+	// CLI option instead.
+	var bin string
+	if p, err := exec.LookPath("docker"); err == nil {
+		bin = p
+	} else if p, err = exec.LookPath("podman"); err == nil {
+		bin = p
+	} else if p, err = exec.LookPath("nerdctl"); err == nil {
+		bin = p
+	} else {
+		return errors.New("no suitable docker CLI-compatible binary found")
+	}
+
+	cmd := exec.Command(bin, "image", "load")
+	imgReader, imgWriter := io.Pipe()
+	defer imgReader.Close()
+	go func() {
+		defer imgWriter.Close()
+		tarball.Write(tag, img, imgWriter)
+	}()
+	cmd.Stdin = imgReader
+	logf("running command: %s", cmd.String())
+	out, err := cmd.CombinedOutput()
+	logf("output: %s", string(out))
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
