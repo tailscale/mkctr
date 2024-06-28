@@ -207,19 +207,32 @@ func fetchAndBuild(bp *buildParams) error {
 	switch baseDesc.MediaType {
 	case types.OCIManifestSchema1, types.DockerManifestSchema2:
 		// baseRef is an image.
-		// Special case it to make to only build for that one platform.
+		// Special case to make it only build for that one platform.
 		baseImage, err := baseDesc.Image()
 		if err != nil {
 			return err
 		}
-		if baseDesc.Platform == nil {
+
+		config, err := baseImage.ConfigFile()
+		if err != nil {
+			return fmt.Errorf("error getting config: %w", err)
+		}
+		if config.Architecture == "" || config.OS == "" {
 			return fmt.Errorf("unknown platform for image: %v", bp.baseImage)
 		}
-		p := *baseDesc.Platform
+
+		p := v1.Platform{
+			OS:           config.OS,
+			Architecture: config.Architecture,
+		}
+		if config.Variant != "" {
+			p.Variant = config.Variant
+		}
+
 		if err := verifyPlatform(p, bp.target); err != nil {
 			return err
 		}
-		logf := withPrefix(logf, fmt.Sprintf("%v/%v: ", baseDesc.Platform.OS, baseDesc.Platform.Architecture))
+		logf := withPrefix(logf, fmt.Sprintf("%v/%v: ", p.OS, p.Architecture))
 		img, err := createImageForBase(bp, logf, baseImage, p)
 		if err != nil {
 			return err
