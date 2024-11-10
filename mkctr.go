@@ -83,20 +83,25 @@ type buildParams struct {
 	gotags      string
 	target      string
 	verbose     bool
+	annotations map[string]string // OCI image annotations
 }
 
 func main() {
 	var (
-		baseImage  = flag.String("base", "", "base image for container")
-		gopaths    = flag.String("gopaths", "", "comma-separated list of go paths in src:dst form")
-		files      = flag.String("files", "", "comma-separated list of static files in src:dst form")
-		repos      = flag.String("repos", "", "comma-separated list of image registries")
-		tagArg     = flag.String("tags", "", "comma-separated tags")
-		ldflagsArg = flag.String("ldflags", "", "the --ldflags value to pass to go")
-		gotags     = flag.String("gotags", "", "the --tags value to pass to go")
-		push       = flag.Bool("push", false, "publish the image")
-		target     = flag.String("target", "", "build for a specific env (options: flyio, local)")
-		verbose    = flag.Bool("v", false, "verbose build output")
+		baseImage   = flag.String("base", "", "base image for container")
+		gopaths     = flag.String("gopaths", "", "comma-separated list of go paths in src:dst form")
+		files       = flag.String("files", "", "comma-separated list of static files in src:dst form")
+		repos       = flag.String("repos", "", "comma-separated list of image registries")
+		tagArg      = flag.String("tags", "", "comma-separated tags")
+		ldflagsArg  = flag.String("ldflags", "", "the --ldflags value to pass to go")
+		gotags      = flag.String("gotags", "", "the --tags value to pass to go")
+		push        = flag.Bool("push", false, "publish the image")
+		target      = flag.String("target", "", "build for a specific env (options: flyio, local)")
+		verbose     = flag.Bool("v", false, "verbose build output")
+		annotations = flag.String("annotations", "", `OCI image annotations https://github.com/opencontainers/image-spec/blob/main/annotations.md.
+		Annotations must be comma separated key=value pairs, i.e key1=val1,key2=val2. For a single image manifest annotations will get added to the image manifest.
+		For an image index (a multi-platform manifest list) annotations will get added to each image manifest as well as the image index.
+		Annotations with empty values are not supported.`)
 	)
 	flag.Parse()
 	if *tagArg == "" {
@@ -126,7 +131,7 @@ func main() {
 		log.Fatal(err)
 	}
 	if len(paths) == 0 && len(staticFiles) == 0 {
-		log.Fatal("atleast one of --files or --gopaths must be set")
+		log.Fatal("at least one of --files or --gopaths must be set")
 	}
 
 	bp := &buildParams{
@@ -139,6 +144,7 @@ func main() {
 		gotags:      *gotags,
 		target:      *target,
 		verbose:     *verbose,
+		annotations: parseAnnotations(*annotations),
 	}
 
 	if err := fetchAndBuild(bp); err != nil {
@@ -242,6 +248,8 @@ func fetchAndBuild(bp *buildParams) error {
 			return nil
 		}
 
+		img = mutate.Annotations(img, bp.annotations).(v1.Image) // OCI annotations
+
 		for _, r := range bp.imageRefs {
 			if bp.target == "local" {
 				if err := loadLocalImage(logf, r, img); err != nil {
@@ -290,6 +298,10 @@ func fetchAndBuild(bp *buildParams) error {
 		if err != nil {
 			return err
 		}
+
+		// Ensure that any provided OCI annotations are added to each OCI image manifest.
+		img = mutate.Annotations(img, bp.annotations).(v1.Image)
+
 		if args := flag.Args(); len(args) > 0 {
 			img, err = mutate.Config(img, v1.Config{
 				Cmd: args,
@@ -306,10 +318,9 @@ func fetchAndBuild(bp *buildParams) error {
 		adds = append(adds, mutate.IndexAddendum{
 			Add: img,
 			Descriptor: v1.Descriptor{
-				MediaType:   id.MediaType,
-				URLs:        id.URLs,
-				Annotations: id.Annotations,
-				Platform:    id.Platform,
+				MediaType: id.MediaType,
+				URLs:      id.URLs,
+				Platform:  id.Platform,
 			},
 		})
 	}
@@ -355,6 +366,10 @@ func fetchAndBuild(bp *buildParams) error {
 	if err != nil {
 		return err
 	}
+
+	// Add any provided OCI annotations to the image index.
+	idx = mutate.Annotations(idx, bp.annotations).(v1.ImageIndex)
+
 	logf("index digest: %v", d)
 	if !bp.publish {
 		logf("not pushing")
@@ -593,4 +608,19 @@ func loadLocalImage(logf logf, tag name.Tag, img v1.Image) error {
 	}
 
 	return nil
+}
+
+// parseAnnotations accepts a string with comma separated key=value pairs of annotations i.e key1=val1,key2=val2 and
+// returns them as a parsed map.
+func parseAnnotations(s string) map[string]string {
+	ss := strings.Split(s, ",")
+	annotations := make(map[string]string)
+	for _, annot := range ss {
+		kv := strings.SplitN(annot, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		annotations[kv[0]] = kv[1]
+	}
+	return annotations
 }
