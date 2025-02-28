@@ -417,7 +417,8 @@ func createImageForBase(bp *buildParams, logf logf, base v1.Image, platform v1.P
 		if err != nil {
 			return nil, err
 		}
-		env = append(env, v)
+		log.Printf("variant: %v", v)
+		env = append(env, "v="+v)
 	}
 
 	files := map[string]string{}
