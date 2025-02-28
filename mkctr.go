@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/daemon"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
@@ -79,6 +81,7 @@ type buildParams struct {
 	staticFiles map[string]string
 	imageRefs   []name.Tag
 	publish     bool
+	outPath     string
 	ldflags     string
 	gotags      string
 	target      string
@@ -96,6 +99,7 @@ func main() {
 		ldflagsArg  = flag.String("ldflags", "", "the --ldflags value to pass to go")
 		gotags      = flag.String("gotags", "", "the --tags value to pass to go")
 		push        = flag.Bool("push", false, "publish the image")
+		outPath     = flag.String("out", "", "writes image(s) to a given folder")
 		target      = flag.String("target", "", "build for a specific env (options: flyio, local)")
 		verbose     = flag.Bool("v", false, "verbose build output")
 		annotations = flag.String("annotations", "", `OCI image annotations https://github.com/opencontainers/image-spec/blob/main/annotations.md.
@@ -140,6 +144,7 @@ func main() {
 		staticFiles: staticFiles,
 		imageRefs:   refs,
 		publish:     *push,
+		outPath:     *outPath,
 		ldflags:     *ldflagsArg,
 		gotags:      *gotags,
 		target:      *target,
@@ -198,6 +203,34 @@ func verifyPlatform(p v1.Platform, target string) error {
 	return nil
 }
 
+func createOutDirectory(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("checking out path: %w", err)
+		}
+	}
+	if fi != nil && !fi.IsDir() {
+		return fmt.Errorf("out must be a directory: %s", path)
+	}
+	if err = os.MkdirAll(path, 0755); err != nil {
+		return fmt.Errorf("creating out directory: %w", err)
+	}
+	return nil
+}
+
+func writeImageToFile(img v1.Image, imgRef name.Reference, p string) error {
+	err := createOutDirectory(p)
+	if err != nil {
+		return err
+	}
+	if err := tarball.WriteToFile(path.Join(p, "image.tar"), imgRef, img); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func fetchAndBuild(bp *buildParams) error {
 	ctx := context.Background()
 	logf := log.Printf
@@ -243,25 +276,30 @@ func fetchAndBuild(bp *buildParams) error {
 		if err != nil {
 			return err
 		}
-		if !bp.publish {
-			logf("not pushing")
-			return nil
-		}
 
-		img = mutate.Annotations(img, bp.annotations).(v1.Image) // OCI annotations
+		switch {
+		case bp.publish:
+			img = mutate.Annotations(img, bp.annotations).(v1.Image) // OCI annotations
 
-		for _, r := range bp.imageRefs {
-			if bp.target == "local" {
-				if err := loadLocalImage(logf, r, img); err != nil {
+			for _, r := range bp.imageRefs {
+				if bp.target == "local" {
+					if err := loadLocalImage(logf, r, img); err != nil {
+						return err
+					}
+					continue
+				}
+				logf("pushing to %v", r)
+				if err := remote.Write(r, img, remoteOpts...); err != nil {
 					return err
 				}
-				continue
 			}
-			logf("pushing to %v", r)
-			if err := remote.Write(r, img, remoteOpts...); err != nil {
-				return err
-			}
+			return nil
+
+		case bp.outPath != "":
+			return writeImageToFile(img, bp.imageRefs[0], bp.outPath)
 		}
+		logf("not pushing or writing to file")
+
 		return nil
 	case types.OCIImageIndex, types.DockerManifestList:
 		// baseRef is a multi-platform index, rest of the method handles this.
@@ -336,23 +374,28 @@ func fetchAndBuild(bp *buildParams) error {
 			return err
 		}
 		logf("image digest: %v", d)
-		if !bp.publish {
-			logf("not pushing")
-			return nil
-		}
 
-		for _, r := range bp.imageRefs {
-			if bp.target == "local" {
-				if err := loadLocalImage(logf, r, img); err != nil {
+		switch {
+		case bp.publish:
+			for _, r := range bp.imageRefs {
+				if bp.target == "local" {
+					if err := loadLocalImage(logf, r, img); err != nil {
+						return err
+					}
+					continue
+				}
+				logf("pushing to %v", r)
+				if err := remote.Write(r, img, remoteOpts...); err != nil {
 					return err
 				}
-				continue
 			}
-			logf("pushing to %v", r)
-			if err := remote.Write(r, img, remoteOpts...); err != nil {
-				return err
-			}
+			return nil
+
+		case bp.outPath != "":
+			return writeImageToFile(img, bp.imageRefs[0], bp.outPath)
 		}
+		logf("not pushing or writing to file")
+
 		return nil
 	}
 	if bp.target == "local" {
@@ -371,17 +414,30 @@ func fetchAndBuild(bp *buildParams) error {
 	idx = mutate.Annotations(idx, bp.annotations).(v1.ImageIndex)
 
 	logf("index digest: %v", d)
-	if !bp.publish {
-		logf("not pushing")
-		return nil
-	}
 
-	for _, r := range bp.imageRefs {
-		logf("pushing to %v", r)
-		if err := remote.WriteIndex(r, idx, remoteOpts...); err != nil {
+	switch {
+	case bp.publish:
+		for _, r := range bp.imageRefs {
+			logf("pushing to %v", r)
+			if err := remote.WriteIndex(r, idx, remoteOpts...); err != nil {
+				return err
+			}
+		}
+
+		return nil
+
+	case bp.outPath != "":
+		err := createOutDirectory(bp.outPath)
+		if err != nil {
 			return err
 		}
+		if _, err := layout.Write(bp.outPath, idx); err != nil {
+			return err
+		}
+
+		return nil
 	}
+	logf("not pushing or writing to file")
 
 	return nil
 }
