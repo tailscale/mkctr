@@ -417,7 +417,7 @@ func createImageForBase(bp *buildParams, logf logf, base v1.Image, platform v1.P
 		if err != nil {
 			return nil, err
 		}
-		env = append(env, v)
+		env = append(env, "GOARM="+v)
 	}
 
 	files := map[string]string{}
