@@ -86,6 +86,7 @@ type buildParams struct {
 	target      string
 	verbose     bool
 	annotations map[string]string // OCI image annotations
+	volumes     map[string]struct{}
 }
 
 func main() {
@@ -94,6 +95,7 @@ func main() {
 		gopaths     = flag.String("gopaths", "", "comma-separated list of go paths in src:dst form")
 		files       = flag.String("files", "", "comma-separated list of static files in src:dst form")
 		repos       = flag.String("repos", "", "comma-separated list of image registries")
+		volumes     = flag.String("volumes", "", "comma-separated list of volumes to add")
 		tagArg      = flag.String("tags", "", "comma-separated tags")
 		ldflagsArg  = flag.String("ldflags", "", "the --ldflags value to pass to go")
 		gotags      = flag.String("gotags", "", "the --tags value to pass to go")
@@ -136,6 +138,13 @@ func main() {
 	if len(paths) == 0 && len(staticFiles) == 0 {
 		log.Fatal("at least one of --files or --gopaths must be set")
 	}
+	var vols map[string]struct{}
+	for vol := range strings.SplitSeq(*volumes, ",") {
+		if vols == nil {
+			vols = make(map[string]struct{})
+		}
+		vols[strings.TrimSpace(vol)] = struct{}{}
+	}
 
 	bp := &buildParams{
 		baseImage:   *baseImage,
@@ -149,6 +158,7 @@ func main() {
 		verbose:     *verbose,
 		goarch:      strings.Split(*goarch, ","),
 		annotations: parseAnnotations(*annotations),
+		volumes:     vols,
 	}
 
 	if err := fetchAndBuild(bp); err != nil {
@@ -306,7 +316,8 @@ func fetchAndBuild(bp *buildParams) error {
 
 		if args := flag.Args(); len(args) > 0 {
 			img, err = mutate.Config(img, v1.Config{
-				Cmd: args,
+				Cmd:     args,
+				Volumes: bp.volumes,
 			})
 			if err != nil {
 				return err
