@@ -170,14 +170,8 @@ func canRunLocal(p v1.Platform) bool {
 	if p.OS != "linux" {
 		return false
 	}
-	if runtime.GOOS == "linux" {
-		return p.Architecture == runtime.GOARCH
-	}
-	if runtime.GOOS == "darwin" {
-		// macOS can run amd64 linux binaries in docker.
-		return p.Architecture == "amd64"
-	}
-	return false
+
+	return p.Architecture == runtime.GOARCH
 }
 
 func verifyPlatform(p v1.Platform, target string) error {
