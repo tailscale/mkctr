@@ -1,7 +1,7 @@
 module github.com/tailscale/mkctr
 
 // Use point versions of Go, see https://github.com/tailscale/tailscale/pull/13485
-go 1.23.1
+go 1.25.5
 
 require github.com/google/go-containerregistry v0.20.2
 
