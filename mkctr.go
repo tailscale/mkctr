@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -81,6 +82,7 @@ type buildParams struct {
 	publish     bool
 	ldflags     string
 	gotags      string
+	goarch      []string
 	target      string
 	verbose     bool
 	annotations map[string]string // OCI image annotations
@@ -96,7 +98,8 @@ func main() {
 		ldflagsArg  = flag.String("ldflags", "", "the --ldflags value to pass to go")
 		gotags      = flag.String("gotags", "", "the --tags value to pass to go")
 		push        = flag.Bool("push", false, "publish the image")
-		target      = flag.String("target", "", "build for a specific env (options: flyio, local)")
+		target      = flag.String("target", "", `build for a specific env (options: "", "flyio", "local")`)
+		goarch      = flag.String("goarch", "arm,arm64,amd64,386", "comma-separated list of architectures to build (if supported by --base image)")
 		verbose     = flag.Bool("v", false, "verbose build output")
 		annotations = flag.String("annotations", "", `OCI image annotations https://github.com/opencontainers/image-spec/blob/main/annotations.md.
 		Annotations must be comma separated key=value pairs, i.e key1=val1,key2=val2. For a single image manifest annotations will get added to the image manifest.
@@ -105,13 +108,13 @@ func main() {
 	)
 	flag.Parse()
 	if *tagArg == "" {
-		log.Fatal("tags must be set")
+		log.Fatal("--tags must be set")
 	}
 	if *repos == "" {
-		log.Fatal("registries must be set")
+		log.Fatal("--repos must be set")
 	}
 	if *baseImage == "" {
-		log.Fatal("baseImage must be set")
+		log.Fatal("--base must be set")
 	}
 	switch *target {
 	case "", "flyio", "local":
@@ -144,6 +147,7 @@ func main() {
 		gotags:      *gotags,
 		target:      *target,
 		verbose:     *verbose,
+		goarch:      strings.Split(*goarch, ","),
 		annotations: parseAnnotations(*annotations),
 	}
 
@@ -180,20 +184,18 @@ func canRunLocal(p v1.Platform) bool {
 	return false
 }
 
-func verifyPlatform(p v1.Platform, target string) error {
+func (bp *buildParams) verifyPlatform(p v1.Platform) error {
 	if p.OS != "linux" {
 		return fmt.Errorf("unsupported OS: %v", p.OS)
 	}
-	if target == "local" && !canRunLocal(p) {
-		return fmt.Errorf("not required for target %q", target)
+	if bp.target == "local" && !canRunLocal(p) {
+		return fmt.Errorf("not required for target %q", bp.target)
 	}
-	if target == "flyio" && p.Architecture != "amd64" {
-		return fmt.Errorf("not required for target %q", target)
+	if bp.target == "flyio" && p.Architecture != "amd64" {
+		return fmt.Errorf("not required for target %q", bp.target)
 	}
-	switch p.Architecture {
-	case "arm", "arm64", "amd64", "386":
-	default:
-		return fmt.Errorf("unsupported arch: %v", p.Architecture)
+	if !slices.Contains(bp.goarch, p.Architecture) {
+		return fmt.Errorf("architecture %q not in requested goarch values %q", p.Architecture, bp.goarch)
 	}
 	return nil
 }
@@ -235,7 +237,7 @@ func fetchAndBuild(bp *buildParams) error {
 			p.Variant = config.Variant
 		}
 
-		if err := verifyPlatform(p, bp.target); err != nil {
+		if err := bp.verifyPlatform(p); err != nil {
 			return err
 		}
 		logf := withPrefix(logf, fmt.Sprintf("%v/%v: ", p.OS, p.Architecture))
@@ -284,7 +286,7 @@ func fetchAndBuild(bp *buildParams) error {
 		if id.Platform == nil {
 			return fmt.Errorf("unknown platform for image: %v", bp.baseImage)
 		}
-		if err := verifyPlatform(*id.Platform, bp.target); err != nil {
+		if err := bp.verifyPlatform(*id.Platform); err != nil {
 			logf("skipping: %v", err)
 			continue
 		}
@@ -391,11 +393,8 @@ func goarm(platform v1.Platform) (string, error) {
 		return "", fmt.Errorf("not arm: %v", platform.Architecture)
 	}
 	v := platform.Variant
-	if len(v) != 2 {
-		return "", fmt.Errorf("unexpected varient: %v", v)
-	}
-	if v[0] != 'v' || !('0' <= v[1] && v[1] <= '9') {
-		return "", fmt.Errorf("unexpected varient: %v", v)
+	if len(v) != 2 || v[0] != 'v' || !('0' <= v[1] && v[1] <= '9') {
+		return "", fmt.Errorf("unexpected ARM variant %q", v)
 	}
 	return string(v[1]), nil
 }
