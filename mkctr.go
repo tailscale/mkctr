@@ -97,6 +97,7 @@ type buildParams struct {
 	annotations map[string]string // OCI image annotations
 	volumes     map[string]struct{}
 	envVars     []string // Environment variables to add to image config
+	user        string   // User ("uid" or "uid:gid") to set in the image config
 }
 
 func main() {
@@ -118,6 +119,7 @@ func main() {
 		For an image index (a multi-platform manifest list) annotations will get added to each image manifest as well as the image index.
 		Annotations with empty values are not supported.`)
 		envArg = flag.String("env", "", "comma-separated list of environment variables in KEY=value form to add to the image config")
+		user   = flag.String("user", "", `user to run the container as, in "uid" or "uid:gid" form; sets the image config User. If unset, the base image's user (often root) is retained`)
 	)
 	flag.Parse()
 	if *tagArg == "" {
@@ -173,6 +175,7 @@ func main() {
 		annotations: parseAnnotations(*annotations),
 		volumes:     vols,
 		envVars:     parseEnv(*envArg),
+		user:        *user,
 	}
 
 	if err := fetchAndBuild(bp); err != nil {
@@ -267,6 +270,10 @@ func fetchAndBuild(bp *buildParams) error {
 		if err != nil {
 			return err
 		}
+		img, err = applyUser(img, bp.user)
+		if err != nil {
+			return err
+		}
 		if !bp.publish {
 			logf("not pushing")
 			return nil
@@ -330,6 +337,11 @@ func fetchAndBuild(bp *buildParams) error {
 		img = mutate.Annotations(img, bp.annotations).(v1.Image)
 
 		img, err = applyEnvVars(img, bp.envVars)
+		if err != nil {
+			return err
+		}
+
+		img, err = applyUser(img, bp.user)
 		if err != nil {
 			return err
 		}
@@ -716,6 +728,19 @@ func applyEnvVars(img v1.Image, newEnvVars []string) (v1.Image, error) {
 		for _, k := range slices.Sorted(maps.Keys(envMap)) {
 			c.Env = append(c.Env, k+"="+envMap[k])
 		}
+		return nil
+	})
+}
+
+// applyUser sets the user (and optionally group) that the container runs as
+// in the image config, overriding any user set by the base image. An empty
+// user leaves the base image's user untouched.
+func applyUser(img v1.Image, user string) (v1.Image, error) {
+	if user == "" {
+		return img, nil
+	}
+	return mutateConfig(img, func(c *v1.Config) error {
+		c.User = user
 		return nil
 	})
 }
