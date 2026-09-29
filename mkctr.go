@@ -568,7 +568,10 @@ func layerFromFiles(logf logf, files map[string]string, layerMediaType types.Med
 		dirs[dir] = true
 		return nil
 	}
-	for src, dst := range files {
+	// Visit sources in sorted order so the same inputs always produce the
+	// same layer.
+	for _, src := range slices.Sorted(maps.Keys(files)) {
+		dst := files[src]
 		err := filepath.WalkDir(src, func(srcWalk string, d fs.DirEntry, err error) error {
 			path := strings.TrimPrefix(srcWalk, src)
 			dstWalk := filepath.Join(dst, path)
