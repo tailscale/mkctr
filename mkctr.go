@@ -570,9 +570,14 @@ func layerFromFiles(logf logf, files map[string]string, layerMediaType types.Med
 	}
 	for src, dst := range files {
 		err := filepath.WalkDir(src, func(srcWalk string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
 			path := strings.TrimPrefix(srcWalk, src)
 			dstWalk := filepath.Join(dst, path)
-			writeDir(filepath.Dir(dstWalk))
+			if err := writeDir(filepath.Dir(dstWalk)); err != nil {
+				return err
+			}
 			if d.IsDir() {
 				return writeDir(dstWalk)
 			}
