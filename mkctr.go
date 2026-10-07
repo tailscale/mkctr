@@ -89,6 +89,7 @@ type buildParams struct {
 	staticFiles map[string]string
 	imageRefs   []name.Tag
 	publish     bool
+	output      string // If non-empty, the OCI image archive output path
 	ldflags     string
 	gotags      string
 	goarch      []string
@@ -111,6 +112,7 @@ func main() {
 		ldflagsArg  = flag.String("ldflags", "", "the --ldflags value to pass to go")
 		gotags      = flag.String("gotags", "", "the --tags value to pass to go")
 		push        = flag.Bool("push", false, "publish the image")
+		output      = flag.String("output", "", "write an OCI image archive to this path (does not require --push)")
 		target      = flag.String("target", "", `build for a specific env (options: "", "flyio", "local")`)
 		goarch      = flag.String("goarch", "arm,arm64,amd64,386", "comma-separated list of architectures to build (if supported by --base image)")
 		verbose     = flag.Bool("v", false, "verbose build output")
@@ -122,11 +124,15 @@ func main() {
 		user   = flag.String("user", "", `user to run the container as, in "uid" or "uid:gid" form; sets the image config User. If unset, the base image's user (often root) is retained`)
 	)
 	flag.Parse()
-	if *tagArg == "" {
-		log.Fatal("--tags must be set")
-	}
-	if *repos == "" {
-		log.Fatal("--repos must be set")
+	// Only archive-only builds without image references can omit --repos and --tags.
+	requireImageRefs := *push || *output == "" || *repos != "" || *tagArg != ""
+	if requireImageRefs {
+		if *tagArg == "" {
+			log.Fatal("--tags must be set")
+		}
+		if *repos == "" {
+			log.Fatal("--repos must be set")
+		}
 	}
 	if *baseImage == "" {
 		log.Fatal("--base must be set")
@@ -136,9 +142,13 @@ func main() {
 	default:
 		log.Fatalf("unsupported target %q", *target)
 	}
-	refs, err := parseRepos(strings.Split(*repos, ","), strings.Split(*tagArg, ","))
-	if err != nil {
-		log.Fatal(err)
+	var refs []name.Tag
+	if *repos != "" {
+		var err error
+		refs, err = parseRepos(strings.Split(*repos, ","), strings.Split(*tagArg, ","))
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 	paths, err := parseFiles(*gopaths)
 	if err != nil {
@@ -167,6 +177,7 @@ func main() {
 		staticFiles: staticFiles,
 		imageRefs:   refs,
 		publish:     *push,
+		output:      *output,
 		ldflags:     *ldflagsArg,
 		gotags:      *gotags,
 		target:      *target,
@@ -274,12 +285,16 @@ func fetchAndBuild(bp *buildParams) error {
 		if err != nil {
 			return err
 		}
+		img = mutate.Annotations(img, bp.annotations).(v1.Image) // OCI annotations
+		if bp.output != "" {
+			if err := writeImageArchive(bp.output, img, p); err != nil {
+				return err
+			}
+		}
 		if !bp.publish {
 			logf("not pushing")
 			return nil
 		}
-
-		img = mutate.Annotations(img, bp.annotations).(v1.Image) // OCI annotations
 
 		for _, r := range bp.imageRefs {
 			if bp.target == "local" {
@@ -382,6 +397,9 @@ func fetchAndBuild(bp *buildParams) error {
 	}
 	switch len(adds) {
 	case 0:
+		if bp.output != "" {
+			return fmt.Errorf("no images for requested architectures %q", bp.goarch)
+		}
 		logf("no images")
 		return nil
 	case 1:
@@ -392,6 +410,11 @@ func fetchAndBuild(bp *buildParams) error {
 			return err
 		}
 		logf("image digest: %v", d)
+		if bp.output != "" {
+			if err := writeImageArchive(bp.output, img, *adds[0].Platform); err != nil {
+				return err
+			}
+		}
 		if !bp.publish {
 			logf("not pushing")
 			return nil
@@ -418,15 +441,20 @@ func fetchAndBuild(bp *buildParams) error {
 	// at this point the base was either a Dokcer manifest list or an OCI
 	// image index- make sure the new manifest of that type.
 	idx := mutate.AppendManifests(mutate.IndexMediaType(empty.Index, baseDesc.MediaType), adds...)
-	d, err := idx.Digest()
-	if err != nil {
-		return err
-	}
 
 	// Add any provided OCI annotations to the image index.
 	idx = mutate.Annotations(idx, bp.annotations).(v1.ImageIndex)
 
+	d, err := idx.Digest()
+	if err != nil {
+		return err
+	}
 	logf("index digest: %v", d)
+	if bp.output != "" {
+		if err := writeIndexArchive(bp.output, idx); err != nil {
+			return err
+		}
+	}
 	if !bp.publish {
 		logf("not pushing")
 		return nil
