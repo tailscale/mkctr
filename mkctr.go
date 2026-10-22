@@ -361,26 +361,6 @@ func fetchAndBuild(bp *buildParams) error {
 			return err
 		}
 
-		if bp.volumes != nil {
-			img, err = mutateConfig(img, func(c *v1.Config) error {
-				c.Volumes = bp.volumes
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-		}
-
-		if args := flag.Args(); len(args) > 0 {
-			img, err = mutateConfig(img, func(c *v1.Config) error {
-				c.Cmd = args
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-		}
-
 		d, err := img.Digest()
 		if err != nil {
 			return err
@@ -534,7 +514,32 @@ func createImageForBase(bp *buildParams, logf logf, base v1.Image, platform v1.P
 	if err != nil {
 		return nil, err
 	}
-	return mutate.AppendLayers(base, layer)
+	img, err := mutate.AppendLayers(base, layer)
+	if err != nil {
+		return nil, err
+	}
+
+	if bp.volumes != nil {
+		img, err = mutateConfig(img, func(c *v1.Config) error {
+			c.Volumes = bp.volumes
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if args := flag.Args(); len(args) > 0 {
+		img, err = mutateConfig(img, func(c *v1.Config) error {
+			c.Cmd = args
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return img, nil
 }
 
 func compileGoBinary(what, where string, env []string, ldflags, gotags string, verbose bool) (string, error) {

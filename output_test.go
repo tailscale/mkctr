@@ -8,6 +8,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"errors"
+	"flag"
 	"io"
 	"log"
 	"net/http"
@@ -26,9 +27,19 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
 func TestArchiveBuild(t *testing.T) {
+	oldFlags := flag.CommandLine
+	flag.CommandLine = flag.NewFlagSet("mkctr-test", flag.ContinueOnError)
+	t.Cleanup(func() { flag.CommandLine = oldFlags })
+	wantCmd := []string{"/srv/file", "--serve"}
+	if err := flag.CommandLine.Parse(wantCmd); err != nil {
+		t.Fatal(err)
+	}
+	wantVolumes := map[string]struct{}{"/data": {}}
+
 	// Use an empty Docker config so host credential helpers are not called.
 	configDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte("{}"), 0600); err != nil {
@@ -36,7 +47,7 @@ func TestArchiveBuild(t *testing.T) {
 	}
 	t.Setenv("DOCKER_CONFIG", configDir)
 
-	for _, mode := range []string{"image", "index", "variants", "publish"} {
+	for _, mode := range []string{"image", "oci-image", "index", "variants", "publish"} {
 		t.Run(mode, func(t *testing.T) {
 			var logs bytes.Buffer
 			oldOutput := log.Writer()
@@ -85,7 +96,10 @@ func TestArchiveBuild(t *testing.T) {
 					},
 				})
 			}
-			if mode == "image" {
+			if mode == "oci-image" {
+				adds[0].Add = mutate.MediaType(adds[0].Add.(v1.Image), types.OCIManifestSchema1)
+			}
+			if mode == "image" || mode == "oci-image" {
 				err = remote.Write(base, adds[0].Add.(v1.Image))
 			} else {
 				err = remote.WriteIndex(base, mutate.AppendManifests(empty.Index, adds...))
@@ -104,6 +118,7 @@ func TestArchiveBuild(t *testing.T) {
 				goarch:      []string{arch},
 				output:      filepath.Join(dir, "image.oci.tar"),
 				annotations: map[string]string{"test.annotation": "test value"},
+				volumes:     wantVolumes,
 			}
 			built, err := name.NewTag(repo+"/built:test", name.Insecure)
 			if err != nil {
@@ -149,6 +164,16 @@ func TestArchiveBuild(t *testing.T) {
 				img, err := idx.Image(desc.Digest)
 				if err != nil {
 					t.Fatal(err)
+				}
+				config, err := img.ConfigFile()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(config.Config.Cmd, wantCmd) {
+					t.Errorf("command = %q; want %q", config.Config.Cmd, wantCmd)
+				}
+				if !reflect.DeepEqual(config.Config.Volumes, wantVolumes) {
+					t.Errorf("volumes = %v; want %v", config.Config.Volumes, wantVolumes)
 				}
 				im, err := img.Manifest()
 				if err != nil || im.Annotations["test.annotation"] != "test value" {
